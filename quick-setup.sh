@@ -87,12 +87,10 @@ encode_payload() {
   local port="$3"
   local token="$4"
   if command_exists python3; then
-    python3 - <<PY
+    python3 - "$host" "$user" "$port" "$token" <<'PY'
 import urllib.parse
-host = ${host@Q}
-user = ${user@Q}
-port = ${port@Q}
-token = ${token@Q}
+import sys
+host, user, port, token = sys.argv[1:5]
 query = urllib.parse.urlencode({"host": host, "port": port, "user": user, "mosh": "true", "setup_token": token})
 print(f"nomad://connect?{query}")
 PY
