@@ -49,6 +49,58 @@ enable_ssh() {
   fi
 }
 
+decode_pubkey() {
+  local input="$1"
+  if command_exists python3; then
+    python3 - "$input" <<'PY'
+import base64
+import sys
+
+data = sys.argv[1].strip()
+try:
+    decoded = base64.b64decode(data).decode("utf-8")
+    print(decoded)
+except Exception:
+    print("")
+PY
+    return
+  fi
+  if command_exists base64; then
+    if base64 --help 2>&1 | grep -q -- "--decode"; then
+      printf '%s' "$input" | base64 --decode
+    else
+      printf '%s' "$input" | base64 -D
+    fi
+  fi
+}
+
+add_pubkey_if_provided() {
+  local pubkey_b64="${NOMAD_PUBKEY_B64:-}"
+  if [ -z "$pubkey_b64" ]; then
+    return
+  fi
+
+  local pubkey
+  pubkey=$(decode_pubkey "$pubkey_b64" || true)
+  pubkey=$(echo "$pubkey" | tr -d '\r')
+  if [ -z "$pubkey" ]; then
+    info "Unable to decode NOMAD_PUBKEY_B64."
+    return
+  fi
+
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+  touch "$HOME/.ssh/authorized_keys"
+  chmod 600 "$HOME/.ssh/authorized_keys"
+
+  if ! grep -Fq "$pubkey" "$HOME/.ssh/authorized_keys"; then
+    printf '%s\n' "$pubkey" >> "$HOME/.ssh/authorized_keys"
+    info "Added SSH public key to ~/.ssh/authorized_keys"
+  else
+    info "SSH public key already exists in ~/.ssh/authorized_keys"
+  fi
+}
+
 detect_ip() {
   local ip=""
   if command_exists ipconfig; then
@@ -111,6 +163,7 @@ open_file() {
 main() {
   install_deps
   enable_ssh
+  add_pubkey_if_provided
 
   local ip
   ip=$(detect_ip)
