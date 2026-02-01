@@ -80,6 +80,19 @@ add_pubkey_if_provided() {
     return
   fi
 
+  local target_user="${SUDO_USER:-${USER:-}}"
+  if [ -z "$target_user" ]; then
+    target_user="$(id -un 2>/dev/null || true)"
+  fi
+  if [ -z "$target_user" ]; then
+    target_user="root"
+  fi
+  local target_home
+  target_home=$(eval echo "~${target_user}")
+  if [ -z "$target_home" ] || [ "$target_home" = "~${target_user}" ]; then
+    target_home="$HOME"
+  fi
+
   local pubkey
   pubkey=$(decode_pubkey "$pubkey_b64" || true)
   pubkey=$(echo "$pubkey" | tr -d '\r')
@@ -88,16 +101,30 @@ add_pubkey_if_provided() {
     return
   fi
 
-  mkdir -p "$HOME/.ssh"
-  chmod 700 "$HOME/.ssh"
-  touch "$HOME/.ssh/authorized_keys"
-  chmod 600 "$HOME/.ssh/authorized_keys"
+  local ssh_dir="${target_home}/.ssh"
+  local auth_keys="${ssh_dir}/authorized_keys"
+  info "Adding SSH public key to ${auth_keys} (user: ${target_user})"
 
-  if ! grep -Fq "$pubkey" "$HOME/.ssh/authorized_keys"; then
-    printf '%s\n' "$pubkey" >> "$HOME/.ssh/authorized_keys"
-    info "Added SSH public key to ~/.ssh/authorized_keys"
+  if [ "$(id -u)" -eq 0 ] && [ "$target_user" != "root" ]; then
+    install -d -m 700 -o "$target_user" -g "$target_user" "$ssh_dir"
+    touch "$auth_keys"
+    chown "$target_user":"$target_user" "$auth_keys"
+    chmod 600 "$auth_keys"
   else
-    info "SSH public key already exists in ~/.ssh/authorized_keys"
+    mkdir -p "$ssh_dir"
+    chmod 700 "$ssh_dir"
+    touch "$auth_keys"
+    chmod 600 "$auth_keys"
+  fi
+
+  if ! grep -Fq "$pubkey" "$auth_keys"; then
+    printf '%s\n' "$pubkey" >> "$auth_keys"
+    if [ "$(id -u)" -eq 0 ] && [ "$target_user" != "root" ]; then
+      chown "$target_user":"$target_user" "$auth_keys"
+    fi
+    info "Added SSH public key to ${auth_keys}"
+  else
+    info "SSH public key already exists in ${auth_keys}"
   fi
 }
 
