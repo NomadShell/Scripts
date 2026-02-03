@@ -28,6 +28,8 @@ PY
   if command_exists base64; then
     if base64 --help 2>&1 | grep -q -- "--decode"; then
       printf '%s' "$input" | base64 --decode
+    elif base64 --help 2>&1 | grep -q " -d"; then
+      printf '%s' "$input" | base64 -d
     else
       printf '%s' "$input" | base64 -D
     fi

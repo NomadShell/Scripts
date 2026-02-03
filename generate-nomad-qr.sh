@@ -46,13 +46,19 @@ encode_payload() {
   local user="$2"
   local port="$3"
   local token="$4"
-  if command_exists python3; then
-    python3 - "$host" "$user" "$port" "$token" <<'PY'
-import urllib.parse
+  if command_exists python3 || command_exists python; then
+    local py="python3"
+    command_exists python3 || py="python"
+    "$py" - "$host" "$user" "$port" "$token" <<'PY'
 import sys
+try:
+    import urllib.parse as parse
+except Exception:
+    import urllib as parse
+
 host, user, port, token = sys.argv[1:5]
-query = urllib.parse.urlencode({"host": host, "port": port, "user": user, "mosh": "true", "setup_token": token})
-print(f"nomad://connect?{query}")
+query = parse.urlencode({"host": host, "port": port, "user": user, "mosh": "true", "setup_token": token})
+print("nomad://connect?{}".format(query))
 PY
   else
     echo "nomad://connect?host=${host}&port=${port}&user=${user}&mosh=true&setup_token=${token}"
@@ -139,10 +145,18 @@ main() {
     qrencode -t ANSIUTF8 "$payload"
   else
     local encoded="$payload"
-    if command_exists python3; then
-      encoded=$(python3 - <<PY
-import urllib.parse
-print(urllib.parse.quote('''$payload'''))
+    if command_exists python3 || command_exists python; then
+      local py="python3"
+      command_exists python3 || py="python"
+      encoded=$("$py" - "$payload" <<'PY'
+import sys
+try:
+    import urllib.parse as parse
+except Exception:
+    import urllib as parse
+
+payload = sys.argv[1]
+print(parse.quote(payload))
 PY
       )
     fi

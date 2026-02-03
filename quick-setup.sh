@@ -13,6 +13,7 @@ install_deps() {
   local missing=()
   command_exists mosh || missing+=(mosh)
   command_exists tmux || missing+=(tmux)
+  command_exists sshd || missing+=(openssh-server)
 
   if [ ${#missing[@]} -eq 0 ]; then
     return
@@ -25,15 +26,15 @@ install_deps() {
   fi
   if command_exists apt-get; then
     sudo apt-get update
-    sudo apt-get install -y mosh tmux qrencode
+    sudo apt-get install -y mosh tmux qrencode openssh-server
     return
   fi
   if command_exists yum; then
-    sudo yum install -y mosh tmux qrencode
+    sudo yum install -y mosh tmux qrencode openssh-server
     return
   fi
   if command_exists dnf; then
-    sudo dnf install -y mosh tmux qrencode
+    sudo dnf install -y mosh tmux qrencode openssh-server
     return
   fi
 
@@ -46,6 +47,33 @@ enable_ssh() {
       info "Enabling Remote Login (SSH)"
       sudo systemsetup -setremotelogin on
     fi
+    return
+  fi
+  if command_exists systemctl; then
+    local svc=""
+    if systemctl list-unit-files 2>/dev/null | grep -q "^sshd.service"; then
+      svc="sshd"
+    elif systemctl list-unit-files 2>/dev/null | grep -q "^ssh.service"; then
+      svc="ssh"
+    fi
+    if [ -n "$svc" ]; then
+      if ! systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+        info "Enabling SSH service ($svc)"
+        sudo systemctl enable "$svc" >/dev/null 2>&1 || true
+      fi
+      if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+        info "Starting SSH service ($svc)"
+        sudo systemctl start "$svc" >/dev/null 2>&1 || true
+      fi
+      return
+    fi
+  fi
+  if command_exists service; then
+    if service ssh status >/dev/null 2>&1; then
+      return
+    fi
+    info "Starting SSH service (ssh)"
+    sudo service ssh start >/dev/null 2>&1 || true
   fi
 }
 
@@ -68,6 +96,8 @@ PY
   if command_exists base64; then
     if base64 --help 2>&1 | grep -q -- "--decode"; then
       printf '%s' "$input" | base64 --decode
+    elif base64 --help 2>&1 | grep -q " -d"; then
+      printf '%s' "$input" | base64 -d
     else
       printf '%s' "$input" | base64 -D
     fi
@@ -165,13 +195,19 @@ encode_payload() {
   local user="$2"
   local port="$3"
   local token="$4"
-  if command_exists python3; then
-    python3 - "$host" "$user" "$port" "$token" <<'PY'
-import urllib.parse
+  if command_exists python3 || command_exists python; then
+    local py="python3"
+    command_exists python3 || py="python"
+    "$py" - "$host" "$user" "$port" "$token" <<'PY'
 import sys
+try:
+    import urllib.parse as parse
+except Exception:
+    import urllib as parse
+
 host, user, port, token = sys.argv[1:5]
-query = urllib.parse.urlencode({"host": host, "port": port, "user": user, "mosh": "true", "setup_token": token})
-print(f"nomad://connect?{query}")
+query = parse.urlencode({"host": host, "port": port, "user": user, "mosh": "true", "setup_token": token})
+print("nomad://connect?{}".format(query))
 PY
   else
     echo "nomad://connect?host=${host}&port=${port}&user=${user}&mosh=true&setup_token=${token}"
@@ -216,10 +252,18 @@ main() {
     qrencode -t ANSIUTF8 "$payload"
   else
     local encoded="$payload"
-    if command_exists python3; then
-      encoded=$(python3 - <<PY
-import urllib.parse
-print(urllib.parse.quote('''$payload'''))
+    if command_exists python3 || command_exists python; then
+      local py="python3"
+      command_exists python3 || py="python"
+      encoded=$("$py" - "$payload" <<'PY'
+import sys
+try:
+    import urllib.parse as parse
+except Exception:
+    import urllib as parse
+
+payload = sys.argv[1]
+print(parse.quote(payload))
 PY
       )
     fi
