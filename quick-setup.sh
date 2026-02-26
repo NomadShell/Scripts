@@ -9,6 +9,20 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+usage() {
+  cat <<USAGE
+Usage:
+  quick-setup.sh [--host <ip>] [--user <name>] [--port <port>] [--skip-system-setup] [--no-browser]
+
+Options:
+  --host               Override detected host/IP in QR payload
+  --user               Override username in QR payload
+  --port               Override SSH port (default: 22)
+  --skip-system-setup  Skip dependency install and SSH service setup
+  --no-browser         Do not open browser when qrencode is unavailable
+USAGE
+}
+
 install_deps() {
   local missing=()
   command_exists mosh || missing+=(mosh)
@@ -224,25 +238,77 @@ open_file() {
 }
 
 main() {
-  install_deps
-  enable_ssh
+  local host_override=""
+  local user_override=""
+  local port="22"
+  local skip_system_setup=0
+  local no_browser=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --host)
+        host_override="$2"
+        shift 2
+        ;;
+      --user)
+        user_override="$2"
+        shift 2
+        ;;
+      --port)
+        port="$2"
+        shift 2
+        ;;
+      --skip-system-setup)
+        skip_system_setup=1
+        shift
+        ;;
+      --no-browser)
+        no_browser=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        info "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+
+  if [ "$skip_system_setup" -eq 0 ]; then
+    install_deps
+    enable_ssh
+  else
+    info "Skipping dependency install and SSH setup."
+  fi
   add_pubkey_if_provided
 
   local ip
-  ip=$(detect_ip)
+  if [ -n "$host_override" ]; then
+    ip="$host_override"
+  else
+    ip=$(detect_ip)
+  fi
   if [ -z "$ip" ]; then
     info "Unable to detect a LAN IP. Please run on the server and provide --host manually."
     exit 1
   fi
 
   local user
-  user=$(whoami)
+  if [ -n "$user_override" ]; then
+    user="$user_override"
+  else
+    user=$(whoami)
+  fi
 
   local token
   token=$(make_token)
 
   local payload
-  payload=$(encode_payload "$ip" "$user" 22 "$token")
+  payload=$(encode_payload "$ip" "$user" "$port" "$token")
 
   info "Quick setup payload:"
   echo "$payload"
@@ -287,11 +353,15 @@ img { width: 260px; height: 260px; }
 </div>
 </html>
 HTML
-    info "Opening QR code in browser..."
-    open_file "$html"
+    if [ "$no_browser" -eq 0 ]; then
+      info "Opening QR code in browser..."
+      open_file "$html"
+    else
+      info "QR page saved to $html"
+    fi
   fi
 
-  info "Done. Scan the QR code from the Nomad app."
+  info "Done. Scan the generated QR code from the Nomad app."
 }
 
 main "$@"

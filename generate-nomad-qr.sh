@@ -78,7 +78,7 @@ usage() {
   cat <<USAGE
 Usage:
   generate-nomad-qr.sh --auto
-  generate-nomad-qr.sh --host <ip> [--user <name>] [--port <port>]
+  generate-nomad-qr.sh --host <ip> [--user <name>] [--port <port>] [--no-browser]
 USAGE
 }
 
@@ -87,6 +87,7 @@ main() {
   local user=""
   local port="22"
   local auto=0
+  local no_browser=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -104,6 +105,10 @@ main() {
         ;;
       --auto)
         auto=1
+        shift
+        ;;
+      --no-browser)
+        no_browser=1
         shift
         ;;
       -h|--help)
@@ -180,7 +185,11 @@ img { width: 260px; height: 260px; }
 </div>
 </html>
 HTML
-    open_file "$html"
+    if [ "$no_browser" -eq 0 ]; then
+      open_file "$html"
+    else
+      info "QR page saved to $html"
+    fi
   fi
 }
 
