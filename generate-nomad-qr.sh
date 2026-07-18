@@ -2,7 +2,7 @@
 set -euo pipefail
 
 info() {
-  printf "[Nomad] %s\n" "$*"
+  printf "[Moshline] %s\n" "$*"
 }
 
 command_exists() {
@@ -79,10 +79,14 @@ usage() {
 Usage:
   generate-nomad-qr.sh --auto
   generate-nomad-qr.sh --host <ip> [--user <name>] [--port <port>]
+
+Legacy terminal-only pairing. For Inbox, agent status, and Usages, run:
+  curl -fsSL https://raw.githubusercontent.com/NomadShell/Scripts/main/quick-setup.sh | bash
 USAGE
 }
 
 main() {
+  info "Legacy terminal-only pairing: Host Helper, Inbox, and Usages are not configured."
   local host=""
   local user=""
   local port="22"
