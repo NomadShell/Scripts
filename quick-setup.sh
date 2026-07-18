@@ -5,8 +5,8 @@ info() {
   printf "[Moshline] %s\n" "$*"
 }
 
-MOSHLINE_HOST_VERSION="0.1.0"
-MOSHLINE_HOST_SHA256="d5e0aec5b0211480b723b510116604afae3306e330ab25c09671e45e669eb1b5"
+MOSHLINE_HOST_VERSION="0.1.2"
+MOSHLINE_HOST_SHA256="ea0bf3be5f36bf6d8fb3edbb97e95b1bc22ca28c5946e7ad0e973168cb9f7a77"
 MOSHLINE_RELEASE_ROOT="${MOSHLINE_DOWNLOAD_BASE_URL:-https://raw.githubusercontent.com/NomadShell/Scripts/main/dist}"
 MOSHLINE_TEMP_DIR=""
 
