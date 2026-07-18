@@ -2,11 +2,28 @@
 set -euo pipefail
 
 info() {
-  printf "[Nomad] %s\n" "$*"
+  printf "[Moshline] %s\n" "$*"
 }
+
+MOSHLINE_HOST_VERSION="0.1.0"
+MOSHLINE_HOST_SHA256="d5e0aec5b0211480b723b510116604afae3306e330ab25c09671e45e669eb1b5"
+MOSHLINE_RELEASE_ROOT="${MOSHLINE_DOWNLOAD_BASE_URL:-https://raw.githubusercontent.com/NomadShell/Scripts/main/dist}"
+MOSHLINE_TEMP_DIR=""
+
+cleanup() {
+  if [ -n "${MOSHLINE_TEMP_DIR:-}" ] && [ -d "$MOSHLINE_TEMP_DIR" ]; then
+    rm -rf "$MOSHLINE_TEMP_DIR"
+  fi
+}
+
+trap cleanup EXIT
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+node_runtime_supported() {
+  command_exists node && command_exists npm && [ "$(node -p 'Number(process.versions.node.split(".")[0]) >= 18 ? "yes" : "no"' 2>/dev/null || true)" = "yes" ]
 }
 
 install_deps() {
@@ -14,6 +31,7 @@ install_deps() {
   command_exists mosh || missing+=(mosh)
   command_exists tmux || missing+=(tmux)
   command_exists sshd || missing+=(openssh-server)
+  node_runtime_supported || missing+=(nodejs-18+ npm)
 
   if [ ${#missing[@]} -eq 0 ]; then
     return
@@ -21,27 +39,111 @@ install_deps() {
 
   info "Installing dependencies: ${missing[*]}"
   if command_exists brew; then
-    brew install mosh tmux qrencode
+    brew install mosh tmux qrencode node
     return
   fi
   if command_exists apt-get; then
     sudo apt-get update
-    sudo apt-get install -y mosh tmux qrencode openssh-server
+    sudo apt-get install -y mosh tmux qrencode openssh-server nodejs npm
     return
   fi
   if command_exists yum; then
-    sudo yum install -y mosh tmux qrencode openssh-server
+    sudo yum install -y mosh tmux qrencode openssh-server nodejs npm
     return
   fi
   if command_exists dnf; then
-    sudo dnf install -y mosh tmux qrencode openssh-server
+    sudo dnf install -y mosh tmux qrencode openssh-server nodejs npm
     return
   fi
 
-  info "No supported package manager found. Please install: mosh tmux (and optional qrencode)."
+  info "No supported package manager found. Please install: Node.js 18+, npm, mosh, tmux (and optional qrencode)."
+}
+
+require_node_runtime() {
+  if node_runtime_supported; then
+    return
+  fi
+  info "Moshline Host Helper requires Node.js 18 or newer and npm."
+  info "Install a current Node.js release, then run this setup command again."
+  exit 1
+}
+
+download_file() {
+  local url="$1"
+  local destination="$2"
+  if command_exists curl; then
+    curl -fL --retry 3 --connect-timeout 15 "$url" -o "$destination"
+    return
+  fi
+  if command_exists wget; then
+    wget -O "$destination" "$url"
+    return
+  fi
+  info "curl or wget is required to download Moshline Host Helper."
+  exit 1
+}
+
+verify_sha256() {
+  local file="$1"
+  local expected="$2"
+  local actual=""
+  if command_exists shasum; then
+    actual=$(shasum -a 256 "$file" | awk '{print $1}')
+  elif command_exists sha256sum; then
+    actual=$(sha256sum "$file" | awk '{print $1}')
+  else
+    info "shasum or sha256sum is required to verify the Host Helper download."
+    exit 1
+  fi
+  if [ "$actual" != "$expected" ]; then
+    info "Host Helper checksum mismatch; refusing to install."
+    exit 1
+  fi
+}
+
+install_host_helper() {
+  require_node_runtime
+
+  MOSHLINE_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/moshline-host.XXXXXX")
+  local archive="${MOSHLINE_TEMP_DIR}/moshline-host-${MOSHLINE_HOST_VERSION}.tgz"
+  local archive_url="${MOSHLINE_RELEASE_ROOT}/moshline-host-${MOSHLINE_HOST_VERSION}.tgz"
+
+  info "Downloading Moshline Host Helper ${MOSHLINE_HOST_VERSION} from GitHub..."
+  download_file "$archive_url" "$archive"
+  verify_sha256 "$archive" "$MOSHLINE_HOST_SHA256"
+
+  info "Installing the verified Host Helper package..."
+  local npm_prefix
+  npm_prefix=$(npm prefix --global 2>/dev/null || true)
+  if [ "$(id -u)" -eq 0 ] || { [ -n "$npm_prefix" ] && [ -w "$npm_prefix" ]; }; then
+    npm install --global "$archive"
+  else
+    sudo npm install --global "$archive"
+  fi
+  hash -r
+  if ! command_exists moshline-host; then
+    info "Host Helper installed, but moshline-host is not on PATH."
+    exit 1
+  fi
+}
+
+wait_for_host_helper() {
+  local attempt=1
+  while [ "$attempt" -le 15 ]; do
+    if moshline-host doctor --json >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+  return 1
 }
 
 enable_ssh() {
+  if [ "${MOSHLINE_SKIP_SSH_ENABLE:-0}" = "1" ]; then
+    info "Skipping SSH service changes (MOSHLINE_SKIP_SSH_ENABLE=1)."
+    return
+  fi
   if command_exists systemsetup; then
     if ! systemsetup -getremotelogin 2>/dev/null | grep -q "On"; then
       info "Enabling Remote Login (SSH)"
@@ -238,13 +340,35 @@ main() {
   local user
   user=$(whoami)
 
+  local terminal_only="${MOSHLINE_TERMINAL_ONLY:-${NOMAD_TERMINAL_ONLY:-${NOMAD_LEGACY_SETUP:-0}}}"
+  if [ "$terminal_only" != "1" ]; then
+    install_host_helper
+    info "Configuring SSH, persistent sessions, agent hooks, Inbox, and Usages..."
+    moshline-host setup \
+      --address "$ip" \
+      --user "$user" \
+      --ssh-port "${MOSHLINE_SSH_PORT:-22}" \
+      --bridge-port "${MOSHLINE_BRIDGE_PORT:-24000}"
+    info "Waiting for Host Helper self-checks..."
+    if ! wait_for_host_helper; then
+      info "Host Helper was installed but did not become ready."
+      moshline-host doctor || true
+      exit 1
+    fi
+    info "Done. Scan the Moshline Host Helper QR code in the Moshline app."
+    info "Run 'moshline-host doctor' any time to check the connection and agent hooks."
+    return
+  fi
+
+  info "Using legacy terminal-only setup (Host Helper, Inbox, and Usages are disabled)."
+
   local token
   token=$(make_token)
 
   local payload
   payload=$(encode_payload "$ip" "$user" 22 "$token")
 
-  info "Quick setup payload:"
+  info "Legacy terminal-only setup payload:"
   echo "$payload"
 
   if command_exists qrencode; then
@@ -291,7 +415,7 @@ HTML
     open_file "$html"
   fi
 
-  info "Done. Scan the QR code from the Nomad app."
+  info "Done. Scan the QR code from the Moshline app."
 }
 
 main "$@"
