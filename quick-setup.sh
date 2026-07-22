@@ -22,6 +22,37 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+usage() {
+  cat <<'USAGE'
+Usage:
+  quick-setup.sh [--host <address>] [--user <name>] [--port <port>]
+                 [--bridge-port <port>] [--skip-system-setup] [--no-browser]
+
+Options:
+  --host               Override the detected address advertised to the iPhone app
+  --user               Override the SSH username
+  --port               Override the SSH port (default: 22)
+  --bridge-port        Override the Host Helper port (default: 24000)
+  --skip-system-setup  Skip dependency, SSH service, and firewall changes
+  --no-browser         Do not open a browser for the legacy terminal-only QR page
+USAGE
+}
+
+validate_port() {
+  local label="$1"
+  local value="$2"
+  case "$value" in
+    ''|*[!0-9]*)
+      info "$label must be an integer between 1 and 65535."
+      exit 1
+      ;;
+  esac
+  if [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+    info "$label must be an integer between 1 and 65535."
+    exit 1
+  fi
+}
+
 node_runtime_supported() {
   command_exists node && command_exists npm && [ "$(node -p 'Number(process.versions.node.split(".")[0]) >= 18 ? "yes" : "no"' 2>/dev/null || true)" = "yes" ]
 }
@@ -40,19 +71,23 @@ install_deps() {
   info "Installing dependencies: ${missing[*]}"
   if command_exists brew; then
     brew install mosh tmux qrencode node
+    install_supported_node_runtime
     return
   fi
   if command_exists apt-get; then
     sudo apt-get update
-    sudo apt-get install -y mosh tmux qrencode openssh-server nodejs npm
+    sudo apt-get install -y ca-certificates curl mosh tmux qrencode openssh-server
+    install_supported_node_runtime
     return
   fi
   if command_exists yum; then
-    sudo yum install -y mosh tmux qrencode openssh-server nodejs npm
+    sudo yum install -y ca-certificates curl mosh tmux qrencode openssh-server
+    install_supported_node_runtime
     return
   fi
   if command_exists dnf; then
-    sudo dnf install -y mosh tmux qrencode openssh-server nodejs npm
+    sudo dnf install -y ca-certificates curl mosh tmux qrencode openssh-server
+    install_supported_node_runtime
     return
   fi
 
@@ -81,6 +116,53 @@ download_file() {
   fi
   info "curl or wget is required to download Moshline Host Helper."
   exit 1
+}
+
+install_supported_node_runtime() {
+  if node_runtime_supported; then
+    return
+  fi
+
+  local setup_url=""
+  local package_manager=""
+  if command_exists apt-get; then
+    setup_url="https://deb.nodesource.com/setup_22.x"
+    package_manager="apt"
+  elif command_exists dnf; then
+    setup_url="https://rpm.nodesource.com/setup_22.x"
+    package_manager="dnf"
+  elif command_exists yum; then
+    setup_url="https://rpm.nodesource.com/setup_22.x"
+    package_manager="yum"
+  else
+    return
+  fi
+
+  local node_setup_dir
+  node_setup_dir=$(mktemp -d "${TMPDIR:-/tmp}/moshline-node.XXXXXX")
+  MOSHLINE_TEMP_DIR="$node_setup_dir"
+  local node_setup_script="${node_setup_dir}/nodesource.sh"
+  info "The system Node.js is too old; enabling the NodeSource 22.x repository..."
+  download_file "$setup_url" "$node_setup_script"
+  sudo -E bash "$node_setup_script"
+  case "$package_manager" in
+    apt)
+      sudo apt-get install -y nodejs
+      ;;
+    dnf)
+      sudo dnf install -y nodejs
+      ;;
+    yum)
+      sudo yum install -y nodejs
+      ;;
+  esac
+  rm -rf "$node_setup_dir"
+  MOSHLINE_TEMP_DIR=""
+
+  if ! node_runtime_supported; then
+    info "Unable to install Node.js 18 or newer."
+    exit 1
+  fi
 }
 
 verify_sha256() {
@@ -176,6 +258,31 @@ enable_ssh() {
     fi
     info "Starting SSH service (ssh)"
     sudo service ssh start >/dev/null 2>&1 || true
+  fi
+}
+
+configure_firewall() {
+  local ssh_port="$1"
+  local bridge_port="$2"
+  if [ "${MOSHLINE_SKIP_FIREWALL:-0}" = "1" ]; then
+    info "Skipping firewall changes (MOSHLINE_SKIP_FIREWALL=1)."
+    return
+  fi
+
+  if command_exists ufw && sudo ufw status 2>/dev/null | grep -q '^Status: active'; then
+    info "Allowing SSH, Host Helper, and Mosh through ufw..."
+    sudo ufw allow "${ssh_port}/tcp" >/dev/null
+    sudo ufw allow "${bridge_port}/tcp" >/dev/null
+    sudo ufw allow '60000:61000/udp' >/dev/null
+    return
+  fi
+
+  if command_exists firewall-cmd && sudo firewall-cmd --state >/dev/null 2>&1; then
+    info "Allowing SSH, Host Helper, and Mosh through firewalld..."
+    sudo firewall-cmd --permanent --add-port="${ssh_port}/tcp" >/dev/null
+    sudo firewall-cmd --permanent --add-port="${bridge_port}/tcp" >/dev/null
+    sudo firewall-cmd --permanent --add-port='60000-61000/udp' >/dev/null
+    sudo firewall-cmd --reload >/dev/null
   fi
 }
 
@@ -326,35 +433,102 @@ open_file() {
 }
 
 main() {
-  install_deps
-  enable_ssh
+  local host_override=""
+  local user_override=""
+  local ssh_port="${MOSHLINE_SSH_PORT:-22}"
+  local bridge_port="${MOSHLINE_BRIDGE_PORT:-24000}"
+  local skip_system_setup="${MOSHLINE_SKIP_SYSTEM_SETUP:-0}"
+  local no_browser=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --host)
+        [ "$#" -ge 2 ] || { info "--host requires a value."; usage; exit 1; }
+        host_override="$2"
+        shift 2
+        ;;
+      --user)
+        [ "$#" -ge 2 ] || { info "--user requires a value."; usage; exit 1; }
+        user_override="$2"
+        shift 2
+        ;;
+      --port)
+        [ "$#" -ge 2 ] || { info "--port requires a value."; usage; exit 1; }
+        ssh_port="$2"
+        shift 2
+        ;;
+      --bridge-port)
+        [ "$#" -ge 2 ] || { info "--bridge-port requires a value."; usage; exit 1; }
+        bridge_port="$2"
+        shift 2
+        ;;
+      --skip-system-setup)
+        skip_system_setup=1
+        shift
+        ;;
+      --no-browser)
+        no_browser=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        return
+        ;;
+      *)
+        info "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+
+  validate_port "SSH port" "$ssh_port"
+  validate_port "Host Helper port" "$bridge_port"
+
+  if [ "$skip_system_setup" = "1" ]; then
+    info "Skipping dependency, SSH service, and firewall setup."
+  else
+    install_deps
+    enable_ssh
+    configure_firewall "$ssh_port" "$bridge_port"
+  fi
   add_pubkey_if_provided
 
   local ip
-  ip=$(detect_ip)
+  if [ -n "$host_override" ]; then
+    ip="$host_override"
+  else
+    ip=$(detect_ip)
+  fi
   if [ -z "$ip" ]; then
     info "Unable to detect a LAN IP. Please run on the server and provide --host manually."
     exit 1
   fi
 
   local user
-  user=$(whoami)
+  if [ -n "$user_override" ]; then
+    user="$user_override"
+  else
+    user=$(whoami)
+  fi
 
   local terminal_only="${MOSHLINE_TERMINAL_ONLY:-${NOMAD_TERMINAL_ONLY:-${NOMAD_LEGACY_SETUP:-0}}}"
   if [ "$terminal_only" != "1" ]; then
     install_host_helper
     info "Configuring SSH, persistent sessions, agent hooks, Inbox, and Usages..."
-    moshline-host setup \
+    local pairing_output
+    pairing_output=$(moshline-host setup \
       --address "$ip" \
       --user "$user" \
-      --ssh-port "${MOSHLINE_SSH_PORT:-22}" \
-      --bridge-port "${MOSHLINE_BRIDGE_PORT:-24000}"
+      --ssh-port "$ssh_port" \
+      --bridge-port "$bridge_port")
     info "Waiting for Host Helper self-checks..."
     if ! wait_for_host_helper; then
       info "Host Helper was installed but did not become ready."
       moshline-host doctor || true
       exit 1
     fi
+    printf '%s\n' "$pairing_output"
     info "Done. Scan the Moshline Host Helper QR code in the Moshline app."
     info "Run 'moshline-host doctor' any time to check the connection and agent hooks."
     return
@@ -366,7 +540,7 @@ main() {
   token=$(make_token)
 
   local payload
-  payload=$(encode_payload "$ip" "$user" 22 "$token")
+  payload=$(encode_payload "$ip" "$user" "$ssh_port" "$token")
 
   info "Legacy terminal-only setup payload:"
   echo "$payload"
@@ -411,11 +585,17 @@ img { width: 260px; height: 260px; }
 </div>
 </html>
 HTML
-    info "Opening QR code in browser..."
-    open_file "$html"
+    if [ "$no_browser" -eq 1 ]; then
+      info "QR page saved to $html"
+    else
+      info "Opening QR code in browser..."
+      open_file "$html"
+    fi
   fi
 
   info "Done. Scan the QR code from the Moshline app."
 }
 
-main "$@"
+if [ "${MOSHLINE_SETUP_SOURCE_ONLY:-0}" != "1" ]; then
+  main "$@"
+fi
