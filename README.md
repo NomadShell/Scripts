@@ -50,7 +50,7 @@ already exist.
 
 ## Host Helper updates
 
-Host Helper updates are independent of the iPhone App version. Release `0.1.4`
+Host Helper updates are independent of the iPhone App version. Release `0.1.5`
 and newer check `dist/latest.json` automatically, verify the release SHA-256,
 and roll back if the restarted daemon does not report the expected version.
 The manifest keeps bridge protocol v1 available so old and new App builds use
