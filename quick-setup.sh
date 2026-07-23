@@ -5,8 +5,8 @@ info() {
   printf "[Moshline] %s\n" "$*"
 }
 
-MOSHLINE_HOST_VERSION="0.1.3"
-MOSHLINE_HOST_SHA256="a6c09a0861a91ecb2e477baae0cf5e3afda7f0b64fc930539c1f054ed659866b"
+MOSHLINE_HOST_VERSION="0.1.4"
+MOSHLINE_HOST_SHA256="a363ea109a9944b03bfb398abea064a8b64073716297281c5f7d1efdd0a80f96"
 MOSHLINE_RELEASE_ROOT="${MOSHLINE_DOWNLOAD_BASE_URL:-https://raw.githubusercontent.com/NomadShell/Scripts/main/dist}"
 MOSHLINE_TEMP_DIR=""
 
@@ -183,6 +183,28 @@ verify_sha256() {
   fi
 }
 
+configure_user_npm_prefix() {
+  local user_prefix="${HOME}/.local"
+  local profile_path="${HOME}/.profile"
+  local start_marker="# >>> Moshline npm prefix >>>"
+  local end_marker="# <<< Moshline npm prefix <<<"
+
+  mkdir -p "${user_prefix}/bin"
+  npm config set prefix "$user_prefix" --location=user
+  export PATH="${user_prefix}/bin:${PATH}"
+
+  touch "$profile_path"
+  if ! grep -Fq "$start_marker" "$profile_path"; then
+    {
+      printf '\n%s\n' "$start_marker"
+      # Keep HOME/PATH expansion for future shells.
+      # shellcheck disable=SC2016
+      printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+      printf '%s\n' "$end_marker"
+    } >> "$profile_path"
+  fi
+}
+
 install_host_helper() {
   require_node_runtime
 
@@ -200,7 +222,9 @@ install_host_helper() {
   if [ "$(id -u)" -eq 0 ] || { [ -n "$npm_prefix" ] && [ -w "$npm_prefix" ]; }; then
     npm install --global "$archive"
   else
-    sudo npm install --global "$archive"
+    info "Using a user-writable npm prefix so Host Helper can update itself..."
+    configure_user_npm_prefix
+    npm install --global "$archive"
   fi
   hash -r
   if ! command_exists moshline-host; then

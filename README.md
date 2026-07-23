@@ -48,6 +48,20 @@ bash quick-setup.sh \
 It does not relax readiness checks; required services and network settings must
 already exist.
 
+## Host Helper updates
+
+Host Helper updates are independent of the iPhone App version. Release `0.1.4`
+and newer check `dist/latest.json` automatically, verify the release SHA-256,
+and roll back if the restarted daemon does not report the expected version.
+The manifest keeps bridge protocol v1 available so old and new App builds use
+the same mobile API contract.
+
+On hosts where the system npm prefix requires root, quick setup migrates Host
+Helper into the user's `~/.local` prefix and records that bin directory in
+`~/.profile`. Existing `0.1.3` installations must run quick setup once because
+that version predates the updater; later releases update without rerunning the
+App setup flow.
+
 ## Tests
 
 ```bash

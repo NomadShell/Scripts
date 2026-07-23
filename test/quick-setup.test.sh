@@ -100,10 +100,52 @@ test_linux_setup_opens_required_ufw_ports() {
   assert_contains "$output" 'SUDO_ARGS=ufw allow 60000:61000/udp'
 }
 
+test_linux_setup_uses_user_writable_prefix_for_self_updates() {
+  local temp_home
+  local output
+  temp_home=$(mktemp -d "${TMPDIR:-/tmp}/moshline-prefix-test.XXXXXX")
+  output=$(
+    HOME="$temp_home"
+    export HOME
+    MOSHLINE_SETUP_SOURCE_ONLY=1 source "$REPO_ROOT/quick-setup.sh"
+    require_node_runtime() { :; }
+    download_file() { : > "$2"; }
+    verify_sha256() { :; }
+    command_exists() { [[ "$1" == 'moshline-host' ]]; }
+    id() {
+      if [[ "${1:-}" == '-u' ]]; then
+        printf '501\n'
+      else
+        command id "$@"
+      fi
+    }
+    npm() {
+      if [[ "${1:-}" == 'prefix' && "${2:-}" == '--global' ]]; then
+        printf '/system-owned-prefix\n'
+        return
+      fi
+      printf 'NPM_ARGS=%s\n' "$*"
+    }
+    install_host_helper
+    printf 'PROFILE_CONTENT=%s\n' "$(<"$HOME/.profile")"
+  )
+
+  assert_contains "$output" 'Using a user-writable npm prefix'
+  assert_contains "$output" 'NPM_ARGS=config set prefix'
+  assert_contains "$output" '--location=user'
+  assert_contains "$output" 'NPM_ARGS=install --global'
+  assert_contains "$output" '# >>> Moshline npm prefix >>>'
+  # Assert the literal profile entry.
+  # shellcheck disable=SC2016
+  assert_contains "$output" 'export PATH="$HOME/.local/bin:$PATH"'
+  rm -rf "$temp_home"
+}
+
 test_bash_setup_forwards_overrides
 test_bash_setup_rejects_invalid_ports
 test_windows_setup_uses_supported_wsl_path
 test_linux_setup_upgrades_old_node_runtimes
 test_linux_setup_opens_required_ufw_ports
+test_linux_setup_uses_user_writable_prefix_for_self_updates
 
 printf 'PASS: quick setup script tests\n'
