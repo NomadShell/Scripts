@@ -9,6 +9,7 @@ MOSHLINE_HOST_VERSION="0.1.4"
 MOSHLINE_HOST_SHA256="a363ea109a9944b03bfb398abea064a8b64073716297281c5f7d1efdd0a80f96"
 MOSHLINE_RELEASE_ROOT="${MOSHLINE_DOWNLOAD_BASE_URL:-https://raw.githubusercontent.com/NomadShell/Scripts/main/dist}"
 MOSHLINE_TEMP_DIR=""
+MOSHLINE_HOST_BIN=""
 
 cleanup() {
   if [ -n "${MOSHLINE_TEMP_DIR:-}" ] && [ -d "$MOSHLINE_TEMP_DIR" ]; then
@@ -205,6 +206,14 @@ configure_user_npm_prefix() {
   fi
 }
 
+run_host_helper() {
+  if [ -n "${MOSHLINE_HOST_BIN:-}" ]; then
+    "$MOSHLINE_HOST_BIN" "$@"
+    return
+  fi
+  moshline-host "$@"
+}
+
 install_host_helper() {
   require_node_runtime
 
@@ -218,17 +227,23 @@ install_host_helper() {
 
   info "Installing the verified Host Helper package..."
   local npm_prefix
+  local install_prefix
   npm_prefix=$(npm prefix --global 2>/dev/null || true)
+  install_prefix="$npm_prefix"
   if [ "$(id -u)" -eq 0 ] || { [ -n "$npm_prefix" ] && [ -w "$npm_prefix" ]; }; then
     npm install --global "$archive"
   else
     info "Using a user-writable npm prefix so Host Helper can update itself..."
     configure_user_npm_prefix
+    install_prefix="${HOME}/.local"
     npm install --global "$archive"
   fi
-  hash -r
-  if ! command_exists moshline-host; then
-    info "Host Helper installed, but moshline-host is not on PATH."
+  if [ -z "$install_prefix" ]; then
+    install_prefix=$(npm prefix --global 2>/dev/null || true)
+  fi
+  MOSHLINE_HOST_BIN="${install_prefix%/}/bin/moshline-host"
+  if [ ! -x "$MOSHLINE_HOST_BIN" ]; then
+    info "Host Helper installed, but ${MOSHLINE_HOST_BIN} is not executable."
     exit 1
   fi
 }
@@ -236,7 +251,7 @@ install_host_helper() {
 wait_for_host_helper() {
   local attempt=1
   while [ "$attempt" -le 15 ]; do
-    if moshline-host doctor --json >/dev/null 2>&1; then
+    if run_host_helper doctor --json >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -541,7 +556,7 @@ main() {
     install_host_helper
     info "Configuring SSH, persistent sessions, agent hooks, Inbox, and Usages..."
     local pairing_output
-    pairing_output=$(moshline-host setup \
+    pairing_output=$(run_host_helper setup \
       --address "$ip" \
       --user "$user" \
       --ssh-port "$ssh_port" \
@@ -549,7 +564,7 @@ main() {
     info "Waiting for Host Helper self-checks..."
     if ! wait_for_host_helper; then
       info "Host Helper was installed but did not become ready."
-      moshline-host doctor || true
+      run_host_helper doctor || true
       exit 1
     fi
     printf '%s\n' "$pairing_output"

@@ -105,6 +105,7 @@ test_linux_setup_uses_user_writable_prefix_for_self_updates() {
   local output
   temp_home=$(mktemp -d "${TMPDIR:-/tmp}/moshline-prefix-test.XXXXXX")
   output=$(
+    # shellcheck disable=SC2030
     HOME="$temp_home"
     export HOME
     MOSHLINE_SETUP_SOURCE_ONLY=1 source "$REPO_ROOT/quick-setup.sh"
@@ -124,9 +125,15 @@ test_linux_setup_uses_user_writable_prefix_for_self_updates() {
         printf '/system-owned-prefix\n'
         return
       fi
+      if [[ "${1:-}" == 'install' ]]; then
+        mkdir -p "$HOME/.local/bin"
+        printf '#!/usr/bin/env bash\nexit 0\n' > "$HOME/.local/bin/moshline-host"
+        chmod +x "$HOME/.local/bin/moshline-host"
+      fi
       printf 'NPM_ARGS=%s\n' "$*"
     }
     install_host_helper
+    printf 'HOST_BIN=%s\n' "$MOSHLINE_HOST_BIN"
     printf 'PROFILE_CONTENT=%s\n' "$(<"$HOME/.profile")"
   )
 
@@ -134,11 +141,34 @@ test_linux_setup_uses_user_writable_prefix_for_self_updates() {
   assert_contains "$output" 'NPM_ARGS=config set prefix'
   assert_contains "$output" '--location=user'
   assert_contains "$output" 'NPM_ARGS=install --global'
+  assert_contains "$output" "HOST_BIN=$temp_home/.local/bin/moshline-host"
   assert_contains "$output" '# >>> Moshline npm prefix >>>'
   # Assert the literal profile entry.
   # shellcheck disable=SC2016
   assert_contains "$output" 'export PATH="$HOME/.local/bin:$PATH"'
   rm -rf "$temp_home"
+}
+
+test_host_helper_commands_use_the_just_installed_prefix() {
+  local temp_dir
+  local output
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/moshline-command-test.XXXXXX")
+  mkdir -p "$temp_dir/bin"
+  printf '#!/usr/bin/env bash\nprintf "EXPLICIT_ARGS=%%s\\n" "$*"\n' \
+    > "$temp_dir/bin/moshline-host"
+  chmod +x "$temp_dir/bin/moshline-host"
+
+  output=$(
+    MOSHLINE_SETUP_SOURCE_ONLY=1 source "$REPO_ROOT/quick-setup.sh"
+    moshline-host() { printf 'WRONG_PATH_ARGS=%s\n' "$*"; }
+    MOSHLINE_HOST_BIN="$temp_dir/bin/moshline-host"
+    run_host_helper doctor --json
+  )
+
+  assert_contains "$output" 'EXPLICIT_ARGS=doctor --json'
+  [[ "$output" != *'WRONG_PATH_ARGS='* ]] \
+    || fail 'run_host_helper used a different Host Helper from PATH'
+  rm -rf "$temp_dir"
 }
 
 test_bash_setup_forwards_overrides
@@ -147,5 +177,6 @@ test_windows_setup_uses_supported_wsl_path
 test_linux_setup_upgrades_old_node_runtimes
 test_linux_setup_opens_required_ufw_ports
 test_linux_setup_uses_user_writable_prefix_for_self_updates
+test_host_helper_commands_use_the_just_installed_prefix
 
 printf 'PASS: quick setup script tests\n'
