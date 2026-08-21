@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "version": "0.1.6",
-  "archive": "moshline-host-0.1.6.tgz",
-  "package_url": "https://raw.githubusercontent.com/NomadShell/Scripts/main/dist/moshline-host-0.1.6.tgz",
-  "sha256": "3576b5aad783821c85f173e9ca56561fefac840b34c78ce3af66482004718aff",
+  "version": "0.1.7",
+  "archive": "moshline-host-0.1.7.tgz",
+  "package_url": "https://raw.githubusercontent.com/NomadShell/Scripts/main/dist/moshline-host-0.1.7.tgz",
+  "sha256": "30cabbaef15dd5c05c5ce96b8d5634584241bb440e18ff9ecb642ae6cdecf25a",
   "protocol_min": 1,
   "protocol_max": 1,
   "min_node_major": 18
